@@ -4,7 +4,20 @@
   include('assets/inc/checklogin.php');
   check_login();
   $doc_id = $_SESSION['doc_id'];
+    if (isset($_GET['delete_jadwal'])) {
+        $id = intval($_GET['delete_jadwal']);
+        $jadwal = "UPDATE jadwal_periksa SET deleted_at = NOW() WHERE id = ? AND deleted_at IS NULL";
+        $stmt = $mysqli->prepare($jadwal);
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
 
+        if ($stmt->affected_rows > 0) {
+        $success = "Jadwal Periksa Deleted";
+        } else {
+        $err = "Record Not Found or Already Deleted";
+        }
+        $stmt->close();
+    }
 ?>
 
 <!DOCTYPE html>
@@ -80,55 +93,72 @@
                                                 <th data-hide="phone">Edit Status</th>
                                             </tr>
                                             </thead>
+
                                             <?php
                                             date_default_timezone_set('Asia/Jakarta');
                                             $current_date = new DateTime();
+                                            $current_time_obj = new DateTime(); // Waktu sekarang
 
-                                            $ret = "SELECT * FROM jadwal_periksa WHERE dokter_id = ? ORDER BY RAND()";
-                                            $stmt = $mysqli->prepare($ret);
+                                            $sql = "SELECT * FROM jadwal_periksa WHERE dokter_id = ? AND deleted_at IS NULL";
+                                            $stmt = $mysqli->prepare($sql);
                                             $stmt->bind_param('i', $doc_id);
                                             $stmt->execute();
                                             $res = $stmt->get_result();
+
                                             $cnt = 1;
+                                            $active_not_finished = false; // Flag untuk memeriksa apakah ada jadwal aktif yang belum selesai
+
                                             while ($row = $res->fetch_object()) {
-                                                $jadwal_periksa = $row->hari . ' ' . $row->jam_mulai;
-                                        ?>
-                                            <tbody>
+                                                $jadwal_selesai = new DateTime($row->jam_selesai); // Waktu selesai jadwal
+                                                $jadwal_periksa = $current_date->format('Y-m-d') . ' ' . $row->jam_mulai . ':00'; // Format jadwal periksa
+                                                if ($row->status === 'aktif' && $current_time_obj < $jadwal_selesai) {
+                                                    $active_not_finished = true; // Tandai bahwa ada jadwal aktif yang belum selesai
+                                                }
+                                            ?>
                                                 <tr>
                                                     <td><?php echo $cnt; ?></td>
                                                     <td><?php echo htmlspecialchars($row->hari); ?></td>
                                                     <td><?php echo htmlspecialchars($row->jam_mulai); ?></td>
                                                     <td><?php echo htmlspecialchars($row->jam_selesai); ?></td>
                                                     <td>
-                                                        <span class="badge badge-<?php echo ($row->status == 'aktif') ? 'success' : 'danger'; ?>">
+                                                        <span class="badge badge-<?php echo ($row->status === 'aktif') ? 'success' : 'danger'; ?>">
                                                             <?php echo ucfirst($row->status); ?>
                                                         </span>
                                                     </td>
 
                                                     <td>
-                                                        <a href="his_doc_view_single_pharm.php?phar_bcode=<?php echo $row->phar_bcode; ?>"
-                                                           class="badge badge-success">
-                                                           <i class="far fa-eye"></i> View
+                                                        <a href="update_jadwal.php?id=<?php echo $row->id; ?>" class="badge badge-primary">
+                                                            <i class="fas fa-clipboard-check"></i> Update
                                                         </a>
-                                                        <a href="update_jadwal.php?id=<?php echo $row->id; ?>"
-                                                           class="badge badge-warning">
-                                                           <i class="fas fa-clipboard-check"></i> Update
+
+                                                        <a href="manage_jadwal_periksa.php?delete_jadwal=<?php echo $row->id; ?>" class="badge badge-danger">
+                                                            <i class="fas fa-trash"></i> Delete
                                                         </a>
                                                     </td>
 
                                                     <td>
-                                                        <?php if ($row->status == 'aktif') { ?>
-                                                            <span class="badge badge-success">Aktif</span>
+                                                        <?php if ($row->status === 'aktif') { ?>
+                                                            <?php if ($current_time_obj < $jadwal_selesai) { ?>
+
+                                                            <?php } else { ?>
+                                                                <span class="badge badge-success">Aktif</span>
+                                                            <?php } ?>
                                                         <?php } else { ?>
+                                                            <!-- Tombol Aktifkan, hanya aktif jika tidak ada jadwal lain yang aktif dan belum selesai -->
                                                             <a href="javascript:void(0);"
                                                             onclick="toggleStatus(<?php echo $row->id; ?>, '<?php echo $row->status; ?>', '<?php echo $jadwal_periksa; ?>')"
-                                                            class="badge badge-warning">Aktifkan</a>
+                                                            class="badge badge-warning <?php echo ($active_not_finished && $row->status !== 'aktif') ? 'disabled' : ''; ?>"
+                                                            id="activate-<?php echo $row->id; ?>"
+                                                            data-href="manage_jadwal_periksa.php?id=<?php echo $row->id; ?>">
+                                                            Aktifkan
+                                                            </a>
                                                         <?php } ?>
                                                     </td>
-
                                                 </tr>
+                                            <?php $cnt++; } ?>
+
                                             </tbody>
-                                        <?php $cnt++; } ?>
+
                                             <tfoot>
                                             <tr class="active">
                                                 <td colspan="8">
@@ -162,86 +192,82 @@
 
         </div>
         <!-- END wrapper -->
+        <script>
+        function toggleStatus(id, currentStatus, jadwalPeriksa) {
+            const currentDate = new Date();
+            const scheduleDate = new Date(jadwalPeriksa); // Jadwal dalam format 'YYYY-MM-DD HH:mm:ss'
 
-    <script>
-    function toggleStatus(id, currentStatus, jadwalPeriksa) {
-        // Ambil waktu saat ini
-        const currentDate = new Date();
+            // Validasi apakah jadwal periksa masih dalam 24 jam
+            if (scheduleDate - currentDate < 0 || scheduleDate - currentDate > 86400000) {
+                alert('Jadwal periksa tidak dapat Diganti. Jadwal periksa harus dalam 24 jam.');
+                return;
+            }
 
-        // Ambil waktu jadwal periksa
-        const scheduleDate = new Date(jadwalPeriksa); // format: 'YYYY-MM-DD HH:mm:ss'
+            // Konfirmasi perubahan status
+            const newStatus = (currentStatus === 'aktif') ? 'nonaktif' : 'aktif';
+            const confirmMessage = `Apakah Anda yakin ingin mengubah status menjadi ${newStatus}?`;
 
-        // Hitung selisih waktu antara sekarang dan jadwal periksa dalam jam
-        const timeDifference = (scheduleDate - currentDate) / (1000 * 3600); // dalam jam
+            if (confirm(confirmMessage)) {
+                // Indikator loading
+                const loadingMessage = document.createElement('p');
+                loadingMessage.id = 'loadingMessage';
+                loadingMessage.textContent = 'Memproses perubahan status...';
+                document.body.appendChild(loadingMessage);
 
-        // Jika jadwal periksa sudah kurang dari 24 jam, batalkan perubahan
-        if (timeDifference < 24) {
-            alert("Tidak dapat mengubah status karena jadwal periksa sudah dekat.");
-            return;
-        }
-
-        // Tentukan status baru
-        const newStatus = (currentStatus === 'aktif') ? 'nonaktif' : 'aktif';
-        const confirmMessage = `Apakah Anda yakin ingin mengubah status menjadi ${newStatus}?`;
-
-        if (confirm(confirmMessage)) {
-            // Tampilkan indikator loading
-            const loadingMessage = document.createElement('p');
-            loadingMessage.id = 'loadingMessage';
-            loadingMessage.textContent = 'Memproses perubahan status...';
-            document.body.appendChild(loadingMessage);
-
-            fetch('toggle_status.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ id, status: newStatus }),
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP error! Status: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                // Hapus pesan loading
-                document.getElementById('loadingMessage').remove();
-
-                if (data.success) {
-                    alert('Status berhasil diperbarui!');
-                    location.reload(); // Reload halaman untuk melihat perubahan
-                } else {
-                    alert('Gagal memperbarui status. Silakan coba lagi.');
-                }
-            })
-            .catch(err => {
-                // Hapus pesan loading jika ada error
-                if (document.getElementById('loadingMessage')) {
+                // Kirim permintaan melalui fetch API
+                fetch('toggle_status.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, status: newStatus }),
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Hapus indikator loading
                     document.getElementById('loadingMessage').remove();
-                }
-                console.error('Error:', err);
-                alert('Terjadi kesalahan saat memperbarui status. Cek koneksi Anda atau hubungi administrator.');
-            });
+
+                    if (data.success) {
+                        alert('Status berhasil diperbarui!');
+                        location.reload(); // Reload halaman untuk melihat perubahan
+                    } else {
+                        alert('Gagal memperbarui status. Silakan coba lagi.');
+                    }
+                })
+                .catch(err => {
+                    if (document.getElementById('loadingMessage')) {
+                        document.getElementById('loadingMessage').remove();
+                    }
+                    console.error('Error:', err);
+                    alert('Terjadi kesalahan saat memperbarui status. Hubungi administrator.');
+                });
+            }
         }
-    }
-</script>
 
 
-        <!-- Right bar overlay-->
-        <div class="rightbar-overlay"></div>
+        </script>
 
-        <!-- Vendor js -->
-        <script src="assets/js/vendor.min.js"></script>
 
-        <!-- Footable js -->
-        <script src="assets/libs/footable/footable.all.min.js"></script>
 
-        <!-- Init js -->
-        <script src="assets/js/pages/foo-tables.init.js"></script>
 
-        <!-- App js -->
-        <script src="assets/js/app.min.js"></script>
+
+<!-- Right bar overlay-->
+<div class="rightbar-overlay"></div>
+
+<!-- Vendor js -->
+<script src="assets/js/vendor.min.js"></script>
+
+<!-- Footable js -->
+<script src="assets/libs/footable/footable.all.min.js"></script>
+
+<!-- Init js -->
+<script src="assets/js/pages/foo-tables.init.js"></script>
+
+<!-- App js -->
+<script src="assets/js/app.min.js"></script>
 
     </body>
 
